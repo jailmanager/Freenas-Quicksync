@@ -1,13 +1,16 @@
 # FreeNAS-Quicksync
 ##### How to guide for getting Intel Quicksync working on FreeNAS
 Plex states that using hardware transcode on FreeBSD requires FreeBSD 12.0 or later. After some testing, it turns out it will work in FreeBSD 11.3 as well, although devfs is not as stable as in FreeBSD 12.x.
+
+Note that for good results, you will need Intel gen 4 (Haswell) or later for 1080p transcode, and Intel gen 7 (Kaby Lake) or later for 4k transcode.
+
 ## Test Results
 - Using an i7 4790K and using Quicksync for one 1080p to 720p or 1080p to 1080p stream left CPU usage at 1%.
 - Testing on a 1225v6 Xeon (7th Gen Kaby Lake) used ~2-3% CPU for a 1080p VC-1 -> 1080p H.264 hardware transcode. The same machine was at 70-75% CPU for a software transcode of VC-1 -> H.264. Some Bluray disks used VC-1, before H.264 became ubiquitous.
 - Testing on a 1225v6 Xeon (7th Gen Kaby Lake) used ~4% CPU for a 4k HDR HEVC 10-bit -> 1080p SDR H.264 hardware transcode. The same machine was at 100% CPU for a software transcode of the same file. Running four 4k hardware transcodes at once did not significantly tax the machine, further testing to determine the max number of possible 4k transcodes was not done.
 - Testing on a G4560 Pentium (7th Gen Kaby Lake) used ~30% CPU for a 4k HEVC -> 1080p H.264 transcode.
 - Testing on a Core i3 6100T (6th Gen SkyLake) shows that acceleration of a 4k HEVC -> 1080p H.264 transcode is minimal on it and takes 95% CPU. This is likely due to limited HEVC features in that generation.
-- Core 4th Gen (Haswell) added H.265 and VC1 support in QuickSync. For 1080p transcode, "Haswell or better" is reasonable guidance.
+- Core 4th Gen (Haswell) added H.264 and VC1 support in QuickSync. For 1080p transcode, "Haswell or better" is reasonable guidance.
 - The Kaby Lake iGPU improved HEVC acceleration and added 10-bit (HDR) HEVC. The HEVC (H.265) codec is used on UHD Blurays. Consider a Kaby Lake or later CPU a requirement for significant acceleration of HEVC (Bluray 4k UHD) content. Note that without HDR10 tone mapping, 4k HDR transcode remains suboptimal, and it is often better to prepare a good SDR 1080p file ahead of time. HDR10 tone mapping is not yet available in a Desktop / Server CPU/iGPU combination.
 ## Compatibility
 - The current (11.3-Ux) Freenas Drivers support Intel CPU Generation 2-7, Sandy Bridge through Kaby Lake
@@ -18,7 +21,7 @@ Plex states that using hardware transcode on FreeBSD requires FreeBSD 12.0 or la
 - C206, C216, C226, C236, and C246 chipsets are able to support iGPU; C202/204, C222, C232 and C242 will not.
 - Caveat that C246 will require TrueNAS 12.x.
 - C226: SuperMicro X10SLH-F and Intel S1200V3RPM confirmed working; X10SLM+-F expected to work
-- C236: SuperMicro X11SSH-F and AsRock Rack E3C236D2I confirmed working; X11SSM-F and X11SSV-M4F expected to work
+- C236: SuperMicro X11SSH-F and AsRock Rack E3C236D2I confirmed working; X11SSA-F and X11SSi-LN4F expected to work; X11SSM-F will not work, X11SSV-M4F likely won't work. Dell R330/R230/T330/T130 will not work.
 - C246: SuperMicro X11SCH-F expected to work; X11SCM-F will not work
 - You can use these boards and chipsets with Intel Pentium or Intel i3/i5/i7 processors, verify supported CPUs for your specific board
 - These considerations do not apply to consumer chipsets
@@ -30,7 +33,10 @@ Plex states that using hardware transcode on FreeBSD requires FreeBSD 12.0 or la
 -  Your mileage will vary: `iocage upgrade -R 11.3-RELEASE plex` worked for one user on a plugin jail (base jail). When in doubt, recreate the jail, and do make sure to use a base jail for ease of maintenance.
 -  Note that using hardware transcode is likely easier in a custom Plex jail than in a plugin, because upgrades to plexmediaserver will not remove the necessary group membership.
 -  Hardware transcode requires a PlexPass subscription. It does not require using the beta code in the plexmediaserver-plexpass package.
-##  Making It work
+##  Making it work
+### Easy Button
+Use either the [freenas-iocage-plex](https://github.com/danb35/freenas-iocage-plex) or [jailman](https://github.com/jailmanager/jailman) scripts and tell them to use hardware transcode, they'll attempt to set everything up for you. See the script's documentation for details.
+### Manually
 ##### From the Freenas console:
 - N.B.: You will have an easier time using the console from SSH. Enable the SSH service in the GUI, then connect to your FreeNAS server using an SSH client like PuTTY, which you can get at https://putty.org. 
 - Create a script file at `/root/scripts/plex-ruleset.sh`, for example by `mkdir /root/scripts` followed by `ee /root/scripts/plex-ruleset.sh`.
@@ -109,9 +115,11 @@ _Note: Plex 1.18.3 did not use hw transcode with a Xeon 1225v6 during testing. P
 
 ##### Troubleshooting
 
-- /dev/dri needs to be visible in FreeBSD itself. If it isn't there, you can't make it visible in the jail. Check that your hardware is supported, and that the BIOS is set to enable the iGPU.
+- /dev/dri needs to be visible in FreeBSD itself. If it isn't there, you can't make it visible in the jail. Check that your hardware is supported, and that the BIOS is set to enable the iGPU. You can use the 'lspci' command from FreeNAS console to show the hardware detected by FreeBSD. You are looking for a Display Controller entry for Intel, for example for Kaby Lake: "Display controller: Intel Corporation HD Graphics P630 (rev 04)". If that is missing, either your CPU doesn't have an iGPU, your chipset does not support it, the BIOS doesn't support it, or it's not enabled in BIOS.
 - There is a known issue with FreeBSD 11.3 where restarting a jail may cause it to lose access to devfs and /dev/dri may no longer be accessible in the jail. There are two known workarounds. One, create a dummy jail that also uses ruleset 10 and have it autostart. That way, there is always a jail that uses the ruleset, and restarting the Plex jail won't trigger the bug. Two, you could "iocage stop plex; service devfs restart; iocage start plex". In testing, this worked, but eventually crashed FreeNAS. Some care needed. TrueNAS 12.0 Core has been tested to not exhibit the issue, and no workarounds are needed
 - The workarounds below for Plex 1.17.0 are *not* needed in Plex 1.18.8 or later.
+- As of Plex 1.19.4, there is a bug in Intel drivers that can cause "blocky" video in high-contrast VC1
+- There is a bug that causes "blocky" video on Gemini Lake iGPUs
 
 ##### Links
 - Intel QuickSync versions and their capabilities can be found here: https://en.wikipedia.org/wiki/Intel_Quick_Sync_Video
@@ -154,3 +162,5 @@ Also copy your driver to Plex
 - 4/15/20 - Removed Intel media driver and allow_mount_devfs notes, as it turns out neither of those is required for hw transcode to work
 
 - 4/26/20 - Calling out codec explicitly for test results; some language cleanup; added a note about hardware acceleration disabling KVM in IPMI. Added a few more explicit instructions for people who are not at home on CLI.
+
+- 6/22/20 - Added note about incompatible Dell models; mention scripts that support hardware transcode; added to troubleshooting section.
